@@ -22,6 +22,7 @@ const P = {
   cursor: <path d="m3 3 7.07 16.97 2.51-7.39 7.39-2.51z" />,
   menor: <path d="m14 10 7-7M20 10h-6V4M3 21l7-7M4 14h6v6" />,
   maior: <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />,
+  slides: <path d="M2 3h20M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3M7 21l5-5 5 5" />,
   play: <path d="m6 3 14 9-14 9z" />,
   pause: <path d="M6 4h4v16H6zM14 4h4v16h-4z" />,
 }

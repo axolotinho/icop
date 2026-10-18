@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { socket } from './socket'
 import Quadro from './Quadro'
 import Ic from './Icones'
+import { abrirPdf, renderPagina } from './pdf'
 import { LIVROS } from './bible'
 
 const senha = new URLSearchParams(window.location.search).get('senha') || ''
@@ -297,14 +298,149 @@ function AbaVideo({ estado, yt, mostrar }) {
   )
 }
 
+/* ---------------- Slides ---------------- */
+function enviarArquivo(file, onProg) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest()
+    x.open('POST', '/api/slides')
+    x.setRequestHeader('x-senha', encodeURIComponent(senha))
+    x.setRequestHeader('x-nome', encodeURIComponent(file.name))
+    x.setRequestHeader('Content-Type', 'application/octet-stream')
+    x.upload.onprogress = (e) => { if (e.lengthComputable) onProg(Math.round((e.loaded / e.total) * 100)) }
+    x.onload = () => {
+      let j = {}
+      try { j = JSON.parse(x.responseText) } catch { /* resposta que não é JSON */ }
+      if (x.status >= 200 && x.status < 300 && j.id) resolve(j)
+      else reject(new Error(j.erro || (x.status === 413 ? 'Arquivo grande demais (máximo 120 MB).' : 'Falha ao enviar o arquivo.')))
+    }
+    x.onerror = () => reject(new Error('Sem conexão com o servidor.'))
+    x.send(file)
+  })
+}
+
+// miniatura (ou prévia grande) de uma página; só desenha quando aparece na tela
+function Miniatura({ doc, n, grande, ativo, onClick }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!doc) return
+    let vivo = true
+    let r = null
+    const obs = new IntersectionObserver(([e]) => {
+      if (!e.isIntersecting || r) return
+      obs.disconnect()
+      r = grande ? renderPagina(doc, n, 640, 480, 1.5) : renderPagina(doc, n, 200, 150, 1)
+      r.promessa.then((c) => {
+        if (!vivo) return
+        if (grande) Object.assign(c.style, { width: 'auto', height: 'auto', maxWidth: '100%', maxHeight: '34vh', display: 'block' })
+        else Object.assign(c.style, { width: '100%', height: 'auto', display: 'block' })
+        ref.current.replaceChildren(c)
+      }).catch(() => {})
+    })
+    obs.observe(ref.current)
+    return () => { vivo = false; obs.disconnect(); r?.cancelar() }
+  }, [doc, n, grande])
+
+  if (grande) return <div className="previa"><span ref={ref} className="previa-img" /></div>
+  return (
+    <button className={'mini' + (ativo ? ' on' : '')} onClick={onClick}>
+      <span ref={ref} className="mini-img" />
+      <i>{n}</i>
+    </button>
+  )
+}
+
+function AbaSlides({ estado, deck, setDeck, mostrar }) {
+  const [doc, setDoc] = useState(null)
+  const [msg, setMsg] = useState('')
+  const [ocupado, setOcupado] = useState(false)
+  const id = deck?.id
+
+  useEffect(() => {
+    setDoc(null)
+    if (!id) return
+    let vivo = true
+    let aberto = null
+    abrirPdf(id).then((d) => {
+      if (!vivo) { d.destroy(); return }
+      aberto = d
+      setDoc(d)
+      socket.emit('slides:total', d.numPages)
+    }).catch(() => { if (vivo) setMsg('Não consegui abrir o arquivo.') })
+    return () => { vivo = false; aberto?.destroy() }
+  }, [id])
+
+  const total = deck?.total || doc?.numPages || 0
+  const pag = deck?.pagina || 1
+  const noAr = estado.modo === 'slides'
+
+  const ir = (n) => {
+    if (!total) return
+    const v = Math.min(total, Math.max(1, n))
+    setDeck((d) => d && { ...d, pagina: v })
+    socket.emit('slides:ir', v)
+  }
+
+  async function escolher(e) {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    if (!f) return
+    setOcupado(true)
+    setMsg('Enviando… 0%')
+    try {
+      await enviarArquivo(f, (p) => setMsg(p < 100 ? `Enviando… ${p}%` : 'Processando…'))
+      setMsg('')
+      mostrar({ modo: 'slides' })
+    } catch (err) {
+      setMsg(err.message || 'Falha ao enviar o arquivo.')
+    }
+    setOcupado(false)
+  }
+
+  return (
+    <div className="painel">
+      <label className={'btn pri' + (ocupado ? ' off' : '')}>
+        <Ic n="slides" /> Enviar PDF ou PowerPoint
+        <input type="file" hidden disabled={ocupado} accept=".pdf,.ppt,.pptx,.pps,.ppsx,.odp,application/pdf" onChange={escolher} />
+      </label>
+      {msg && <p className={ocupado ? 'mudo' : 'erro'}>{msg}</p>}
+
+      {deck && (
+        <>
+          <div className="deck-info">
+            <span className="nome">{deck.nome}</span>
+            <button className={'ib' + (noAr ? ' ok' : '')} onClick={() => mostrar({ modo: 'slides' })}>
+              <Ic n={noAr ? 'check' : 'monitor'} /> {noAr ? 'Na tela' : 'Mostrar'}
+            </button>
+          </div>
+
+          <Miniatura doc={doc} n={pag} grande />
+
+          <div className="nav">
+            <button className="btn" disabled={pag <= 1} onClick={() => ir(pag - 1)}><Ic n="esq" /> Anterior</button>
+            <span className="pg">{pag} / {total || '…'}</span>
+            <button className="btn pri" disabled={!!total && pag >= total} onClick={() => ir(pag + 1)}>Próximo <Ic n="dir" /></button>
+          </div>
+
+          <div className="minis">
+            {Array.from({ length: total }, (_, i) => i + 1).map((n) => (
+              <Miniatura key={n} doc={doc} n={n} ativo={n === pag} onClick={() => ir(n)} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 /* ---------------- Controle ---------------- */
-const ABAS = [['biblia', 'livro', 'Bíblia'], ['quadro', 'quadro', 'Quadro'], ['imagem', 'imagem', 'Imagem'], ['video', 'video', 'Vídeo']]
+const ABAS = [['biblia', 'livro', 'Bíblia'], ['quadro', 'quadro', 'Quadro'], ['slides', 'slides', 'Slides'], ['imagem', 'imagem', 'Imagem'], ['video', 'video', 'Vídeo']]
 
 export default function Controller() {
   const [ok, setOk] = useState(null)
   const [aba, setAba] = useState('biblia')
   const [estado, setEstado] = useState({ modo: 'vazio' })
   const [yt, setYt] = useState({ t: 0, d: 0, tocando: false })
+  const [deck, setDeck] = useState(null)
   const [aberta, setAberta] = useState(() => {
     try { return localStorage.getItem('rail') !== '0' } catch { return true }
   })
@@ -319,11 +455,13 @@ export default function Controller() {
     socket.on('connect', entrar)
     socket.on('estado', setEstado)
     socket.on('yt-status', setYt)
+    socket.on('deck', setDeck)
     if (socket.connected) entrar()
     return () => {
       socket.off('connect', entrar)
       socket.off('estado', setEstado)
       socket.off('yt-status', setYt)
+      socket.off('deck', setDeck)
     }
   }, [])
 
@@ -359,6 +497,7 @@ export default function Controller() {
       <section className="conteudo">
         {aba === 'biblia' && <AbaBiblia mostrar={mostrar} />}
         {aba === 'quadro' && <AbaQuadro estado={estado} mostrar={mostrar} />}
+        {aba === 'slides' && <AbaSlides estado={estado} deck={deck} setDeck={setDeck} mostrar={mostrar} />}
         {aba === 'imagem' && <AbaImagem mostrar={mostrar} />}
         {aba === 'video' && <AbaVideo estado={estado} yt={yt} mostrar={mostrar} />}
       </section>

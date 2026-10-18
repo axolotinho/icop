@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { socket } from './socket'
 import Ceu from './Ceu'
 import Quadro from './Quadro'
+import { abrirPdf, renderPagina } from './pdf'
 
 const MARGEM = 16 // folga ao redor do quadro, em px da tela
 
@@ -67,6 +68,49 @@ function Video({ id }) {
   return <div className="video"><div ref={alvo} /></div>
 }
 
+// Slides em tela cheia (fundo preto), encaixados na janela
+function Slides({ id, pagina }) {
+  const caixa = useRef(null)
+  const [doc, setDoc] = useState(null)
+  const [tam, setTam] = useState([window.innerWidth, window.innerHeight])
+
+  useEffect(() => {
+    const f = () => setTam([window.innerWidth, window.innerHeight])
+    window.addEventListener('resize', f)
+    return () => window.removeEventListener('resize', f)
+  }, [])
+
+  useEffect(() => {
+    if (!id) return
+    let vivo = true
+    let aberto = null
+    setDoc(null)
+    abrirPdf(id).then((d) => {
+      if (!vivo) { d.destroy(); return }
+      aberto = d
+      setDoc(d)
+    }).catch(() => {})
+    return () => { vivo = false; aberto?.destroy() }
+  }, [id])
+
+  useEffect(() => {
+    if (!doc) return
+    const n = Math.min(Math.max(1, pagina || 1), doc.numPages)
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    const r = renderPagina(doc, n, tam[0], tam[1], dpr)
+    let vivo = true
+    r.promessa.then((c) => {
+      if (!vivo) return
+      c.style.width = `${c.width / dpr}px`
+      c.style.height = `${c.height / dpr}px`
+      caixa.current.replaceChildren(c) // o slide anterior fica até o novo estar pronto
+    }).catch(() => {})
+    return () => { vivo = false; r.cancelar() }
+  }, [doc, pagina, tam])
+
+  return <div ref={caixa} className="slides" />
+}
+
 export default function Display() {
   const [estado, setEstado] = useState({ modo: 'vazio' })
   const escala = useEscala()
@@ -92,7 +136,7 @@ export default function Display() {
   return (
     <>
       <Ceu />
-      {estado.modo !== 'quadro' && (
+      {estado.modo !== 'quadro' && estado.modo !== 'slides' && (
       <div className="palco" style={{ transform: `translate(-50%, -50%) scale(${escala})` }}>
         {estado.modo === 'vazio' && (
           <div className="centro">
@@ -116,6 +160,8 @@ export default function Display() {
 
       </div>
       )}
+
+      {estado.modo === 'slides' && <Slides id={estado.id} pagina={estado.pagina} />}
 
       {estado.modo === 'quadro' && (
         <div style={{ position: 'fixed', inset: MARGEM, zIndex: 2 }}>
